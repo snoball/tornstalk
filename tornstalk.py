@@ -30,7 +30,7 @@ class Connection(object):
             BAD_FORMAT = self.handle_error,
             UNKNOWN_COMMAND = self.handle_error,
             # put <pri> <delay> <ttr> <bytes>
-            INSERTED = self.ok,
+            INSERTED = self.ret_inserted,
             BURIED = self.fail,
             EXPECTED_CRLF = self.fail,
             JOB_TOO_BIG = self.fail,
@@ -39,7 +39,7 @@ class Connection(object):
             # reserve
             DEADLINE_SOON = self.ok,
             TIMED_OUT = self.fail,
-            RESERVED = self.ok,
+            RESERVED = self.ret_reserved,
             # delete <id>
             DELETED = self.ok,
             NOT_FOUND = self.fail,
@@ -59,7 +59,7 @@ class Connection(object):
                         )
         _sock.connect((host, port))
         _sock.setblocking(False)
-        self.stream = IOStream(_sock, self._ioloop)
+        self.stream = IOStream(_sock, io_loop=self._ioloop)
 
         # i like a placeholder for this. we'll assign it later
         self.callback = None
@@ -91,12 +91,31 @@ class Connection(object):
         print "payload=", payload
         self._command(payload)
 
+    def ret_inserted(self, toks):
+        print 'ret:', toks
+        jobid = int(toks[0])
+        self.callback(jobid) # pi
+
+    def _read_payload(self, payload):
+        self.callback(payload[:-2]) # lose the \r\n
+
+    def ret_reserved(self, toks):
+        jobid, size = toks
+        jobid = int(jobid)
+        size = int(size) + 2 # len('\r\n')
+        self.stream.read_bytes(size, self._read_payload)
+
+    def cmd_reserve(self, callback):
+        self.callback = callback
+        cmd = 'reserve\r\n'
+        self._command(cmd)
+
     def _parse_response(self, resp):
         print "parse_response"
         tokens = resp.strip().split()
         if not tokens: return
-        print self._beanstalk_protocol_1x.get(tokens[0])
-        self.callback(tokens)
+        print 'tok:', tokens[1:]
+        self._beanstalk_protocol_1x.get(tokens[0])(tokens[1:])
 
     def handle_error(self, *a):
         print "error", a
@@ -118,15 +137,23 @@ class Job(object):
     Each Job has one connection to the beanstalk instance.
     Connections should NOT BE SHARED.
     """
-    def __init__(self, host, port, **kwa):
+    def __init__(self, settings, **kwa):
+        try:
+            host = settings['tornstalk_host']
+            port = settings['tornstalk_port']
+            assert host and int(port)
+        except:
+            raise TornStalkError(
+                "ERROR: couldn't find tornstalk_host or tornstalk_port "
+                " in your tornado settings"
+                )
         self._connection = Connection(host, port, **kwa)
 
     def put(self, body, callback, tube='default'):
         self._connection.cmd_put(body, callback)
 
-    def reserve(cls, connection, callback):
-        callback(cls())
-        pass
+    def reserve(self, callback):
+        self._connection.cmd_reserve(callback)
 
     @classmethod
     def use(self, callback):
