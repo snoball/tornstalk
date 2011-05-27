@@ -43,8 +43,8 @@ class TornStalkTests(BeanstalkTest):
 
     def test_put(self):
 
-        def cb(jobid):
-            print "cb", jobid
+        def cb(resp):
+            jobid = resp.data
             assert jobid
             self._ioloop.stop()
 
@@ -54,10 +54,11 @@ class TornStalkTests(BeanstalkTest):
 
     def test_reserve(self):
 
-        def cb_reserve(payload):
+        def cb_reserve(resp):
+            payload = resp.data
             assert payload == 'abcdef'
 
-        def cb_put(jobid):
+        def cb_put(resp):
             self.job.reserve(cb_reserve)
             self._ioloop.stop()
 

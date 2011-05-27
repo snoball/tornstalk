@@ -11,6 +11,18 @@ class TornStalkError(Exception):
     generic exception
     """
 
+
+class TornStalkResponse(object):
+    """
+    as close as python can get to a struct
+    """
+    __slots__ = ('result', 'msg', 'data')
+    def __init__(self, result=True, msg=None, data=None):
+        self.result = result
+        self.msg = msg
+        self.data = data
+
+
 class Connection(object):
     """
     Encapsulates the communication, including parsing, with the beanstalkd
@@ -24,31 +36,31 @@ class Connection(object):
         # are the only ones we handle today.  patches gleefully accepted.
         self._beanstalk_protocol_1x = dict(
             # generic returns
-            OUT_OF_MEMORY = self.handle_error,
-            INTERNAL_ERROR = self.handle_error,
-            DRAINING = self.handle_error,
-            BAD_FORMAT = self.handle_error,
-            UNKNOWN_COMMAND = self.handle_error,
+            OUT_OF_MEMORY = self.fail,
+            INTERNAL_ERROR = self.fail,
+            DRAINING = self.fail,
+            BAD_FORMAT = self.fail,
+            UNKNOWN_COMMAND = self.fail,
             # put <pri> <delay> <ttr> <bytes>
             INSERTED = self.ret_inserted,
-            BURIED = self.fail,
+            BURIED = self.ret_inserted,
             EXPECTED_CRLF = self.fail,
             JOB_TOO_BIG = self.fail,
             # use
-            USING = self.ok,
+            USING = None,
             # reserve
-            DEADLINE_SOON = self.ok,
-            TIMED_OUT = self.fail,
             RESERVED = self.ret_reserved,
+            DEADLINE_SOON = None,
+            TIMED_OUT = None,
             # delete <id>
-            DELETED = self.ok,
-            NOT_FOUND = self.fail,
+            DELETED = None,
+            NOT_FOUND = None,
             # touch <id>
-            TOUCHED = self.ok,
+            TOUCHED = None,
             # watch <tube>
-            WATCHING = self.ok,
+            WATCHING = None,
             #ignore <tube>
-            NOT_IGNORED = self.fail,
+            NOT_IGNORED = None,
             )
 
         # open a connection to the beanstalkd
@@ -63,6 +75,18 @@ class Connection(object):
 
         # i like a placeholder for this. we'll assign it later
         self.callback = None
+        self.tsr = TornStalkResponse()
+
+    def _parse_response(self, resp):
+        print "parse_response"
+        tokens = resp.strip().split()
+        if not tokens: return
+        print 'tok:', tokens[1:]
+        self._beanstalk_protocol_1x.get(tokens[0])(tokens)
+
+    def _payload_rcvd(self, payload):
+        self.tsr.data = payload[:-2] # lose the \r\n
+        self.callback(self.tsr) # lose the \r\n
 
     def _command(self, contents):
         print "sending>%s<" % contents
@@ -86,36 +110,24 @@ class Connection(object):
                 ttr = ttr,
                 size = len(body)
                 )
-
         payload = '{}\r\n{}\r\n'.format(cmd, body)
-        print "payload=", payload
         self._command(payload)
-
-    def ret_inserted(self, toks):
-        print 'ret:', toks
-        jobid = int(toks[0])
-        self.callback(jobid) # pi
-
-    def _read_payload(self, payload):
-        self.callback(payload[:-2]) # lose the \r\n
-
-    def ret_reserved(self, toks):
-        jobid, size = toks
-        jobid = int(jobid)
-        size = int(size) + 2 # len('\r\n')
-        self.stream.read_bytes(size, self._read_payload)
 
     def cmd_reserve(self, callback):
         self.callback = callback
         cmd = 'reserve\r\n'
         self._command(cmd)
 
-    def _parse_response(self, resp):
-        print "parse_response"
-        tokens = resp.strip().split()
-        if not tokens: return
-        print 'tok:', tokens[1:]
-        self._beanstalk_protocol_1x.get(tokens[0])(tokens[1:])
+    def ret_inserted(self, toks):
+        """ handles both INSERTED and BURIED """
+        jobid = int(toks[1])
+        self.callback(TornStalkResponse(data=jobid))
+
+    def ret_reserved(self, toks):
+        jobid, size = toks[1:]
+        jobid = int(jobid)
+        size = int(size) + 2 # len('\r\n')
+        self.stream.read_bytes(size, self._payload_rcvd)
 
     def handle_error(self, *a):
         print "error", a
@@ -125,9 +137,8 @@ class Connection(object):
         print "ok", a
         return True
 
-    def fail(self, *a):
-        print "fail", a
-        return False
+    def fail(self, toks):
+        self.callback(TornStalkResponse(result=False, msg=toks[1]))
 
 
 class Job(object):

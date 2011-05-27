@@ -1,0 +1,34 @@
+# tornstalk
+
+An IOLoop based [beanstalkd](https://github.com/kr/beanstalkd) driver for
+[Tornado](http://tornadoweb.org).
+
+## completely trivial usage example
+
+```python
+
+import tornstalk
+
+class SomeRequestHandler(RequestHandler):
+
+    @tornado.web.asynchronous
+    def get(self):
+        job = tornstalk.Job(self.application.settings)
+        job.put(json.dumps(some_stuff), self.cb)
+
+    def cb(self, resp):
+        jobid = resp.data
+        self.finish('job put into queue at {}'.format(jobid))
+
+```
+
+
+
+## glaring holes
+
+* documentation
+* complete protocol coverage
+* complete test coverage
+
+so, that sums it up...
+
